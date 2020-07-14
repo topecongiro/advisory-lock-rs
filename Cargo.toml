@@ -5,7 +5,7 @@ authors = ["topecongiro"]
 edition = "2018"
 license = "MIT"
 description = "A cross-platform advisory file lock."
-categories = ["advisory-lock", "os::unix-apis", "os::windows-apis"]
+categories = ["filesystem", "os::unix-apis", "os::windows-apis"]
 repository = "https://github.com/topecongiro/advisory-lock-rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
