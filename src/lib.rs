@@ -1,19 +1,30 @@
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::path::Path;
+use std::{
+    fs::{File, OpenOptions},
+    io,
+    ops::{Deref, DerefMut},
+    path::Path,
+};
 
 use thiserror::Error;
 
+#[cfg(windows)]
+mod windows;
+
+#[cfg(unix)]
+mod unix;
+
+/// An enumeration of possible errors which can occur while trying to acquire a lock.
 #[derive(Debug, Error)]
 pub enum FileLockError {
-    /// The file is already locked.
+    /// The file is already locked by other process.
     #[error("the file is already locked")]
     AlreadyLocked,
-    /// The error during I/O operations.
+    /// The error occurred during I/O operations.
     #[error("I/O error: {0}")]
     IOError(#[from] io::Error),
 }
 
+/// An enumeration of types which represents how to acquire an advisory lock.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum FileLockMode {
     /// Obtain an exclusive file lock.
@@ -86,6 +97,7 @@ impl AdvisoryFileLock {
         self.try_lock_impl()
     }
 
+    /// Unlock this advisory file lock.
     pub fn unlock(&mut self) -> Result<(), FileLockError> {
         self.unlock_impl()
     }
@@ -102,11 +114,19 @@ impl Drop for AdvisoryFileLock {
     }
 }
 
-#[cfg(windows)]
-mod windows;
+impl Deref for AdvisoryFileLock {
+    type Target = File;
 
-#[cfg(unix)]
-mod unix;
+    fn deref(&self) -> &Self::Target {
+        &self.file
+    }
+}
+
+impl DerefMut for AdvisoryFileLock {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.file
+    }
+}
 
 #[cfg(test)]
 mod tests {
