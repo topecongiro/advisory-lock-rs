@@ -1,3 +1,54 @@
+//! Advisory lock provides simple and convenient API for using file locks.
+//!
+//! These are called advisory because they don't prevent other processes from
+//! accessing the files directly, bypassing the locks.
+//! However, if multiple processes agree on acquiring file locks, they should
+//! work as expected.
+//!
+//! The main entity of the crate is [`AdvisoryFileLock`] which is effectively
+//! a [`RwLock`] but for [`File`].
+//!
+//! Example:
+//! ```
+//! use advisory_lock::{AdvisoryFileLock, FileLockMode, FileLockError};
+//! #
+//! # std::fs::File::create("foo.txt").unwrap();
+//! #
+//! // Create the file
+//! let mut exclusive_file = AdvisoryFileLock::new("foo.txt", FileLockMode::Exclusive)?;
+//!
+//! exclusive_file.lock()?;
+//!
+//! let mut shared_file = AdvisoryFileLock::new("foo.txt", FileLockMode::Shared)?;
+//!
+//! // Try to acquire the lock in non-blocking way
+//! assert!(matches!(shared_file.try_lock(), Err(FileLockError::AlreadyLocked)));
+//!
+//! exclusive_file.unlock()?;
+//!
+//! shared_file.try_lock().expect("Works, because the exlusive lock was released");
+//!
+//! let mut shared_file_2 = AdvisoryFileLock::new("foo.txt", FileLockMode::Shared)?;
+//!
+//! shared_file_2.lock().expect("Should be fine to have multiple shared locks");
+//!
+//! // Nope, now we have to wait until all shared locks are released...
+//! assert!(matches!(exclusive_file.try_lock(), Err(FileLockError::AlreadyLocked)));
+//!
+//! // We can unlock them explicitly and handle the potential error
+//! shared_file.unlock()?;
+//! // Or drop the lock, such that we `log::error!()` if it happens and discard it
+//! drop(shared_file_2);
+//!
+//! exclusive_file.lock().expect("All other locks should have been released");
+//! #
+//! # std::fs::remove_file("foo.txt")?;
+//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! [`AdvisoryFileLock`]: struct.AdvisoryFileLock.html
+//! [`RwLock`]: https://doc.rust-lang.org/stable/std/sync/struct.RwLock.html
+//! [`File`]: https://doc.rust-lang.org/stable/std/fs/struct.File.html
 use std::{
     fs::{File, OpenOptions},
     io,
