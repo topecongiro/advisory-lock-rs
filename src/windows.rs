@@ -108,7 +108,9 @@ fn unlock_file(raw_handle: RawHandle) -> Result<(), FileLockError> {
         if raw_error == ERROR_NOT_LOCKED {
             Ok(())
         } else {
-            Err(FileLockError::Io(io::Error::from_raw_os_error(raw_error as i32)))
+            Err(FileLockError::Io(io::Error::from_raw_os_error(
+                raw_error as i32,
+            )))
         }
     }
 }
