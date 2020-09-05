@@ -5,7 +5,7 @@ use winapi::{
     shared::{
         minwindef::TRUE,
         ntdef::NULL,
-        winerror::{ERROR_LOCKED, ERROR_NOT_LOCKED},
+        winerror::{ERROR_LOCK_VIOLATION, ERROR_NOT_LOCKED},
     },
     um::{
         errhandlingapi::GetLastError,
@@ -78,7 +78,7 @@ fn lock_file(
     };
     if result != TRUE {
         return match unsafe { GetLastError() } {
-            ERROR_LOCKED => Err(FileLockError::AlreadyLocked),
+            ERROR_LOCK_VIOLATION => Err(FileLockError::AlreadyLocked),
             raw_error => Err(FileLockError::Io(io::Error::from_raw_os_error(
                 raw_error as i32,
             ))),
