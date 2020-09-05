@@ -50,10 +50,11 @@
 //! [`RwLock`]: https://doc.rust-lang.org/stable/std/sync/struct.RwLock.html
 //! [`File`]: https://doc.rust-lang.org/stable/std/fs/struct.File.html
 use std::{
+    fmt,
     fs::{File, OpenOptions},
     io,
     ops::{Deref, DerefMut},
-    path::Path, fmt,
+    path::Path,
 };
 
 #[cfg(windows)]
@@ -79,6 +80,8 @@ impl fmt::Display for FileLockError {
         }
     }
 }
+
+impl std::error::Error for FileLockError {}
 
 /// An enumeration of types which represents how to acquire an advisory lock.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -163,10 +166,7 @@ impl AdvisoryFileLock {
 impl Drop for AdvisoryFileLock {
     fn drop(&mut self) {
         if let Err(err) = self.unlock() {
-            log::error!(
-                "Unlock_file failed during dropping: {}",
-                err
-            );
+            log::error!("Unlock_file failed during dropping: {}", err);
         }
     }
 }
