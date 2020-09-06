@@ -5,7 +5,7 @@ use winapi::{
     shared::{
         minwindef::TRUE,
         ntdef::NULL,
-        winerror::{ERROR_LOCKED, ERROR_NOT_LOCKED},
+        winerror::{ERROR_LOCK_VIOLATION, ERROR_NOT_LOCKED},
     },
     um::{
         errhandlingapi::GetLastError,
@@ -29,7 +29,7 @@ impl AdvisoryFileLock {
     }
 
     pub(super) fn unlock_impl(&mut self) -> Result<(), FileLockError> {
-        Ok(unlock_file(self.file.as_raw_handle())?)
+        unlock_file(self.file.as_raw_handle())
     }
 }
 
@@ -78,8 +78,8 @@ fn lock_file(
     };
     if result != TRUE {
         return match unsafe { GetLastError() } {
-            ERROR_LOCKED => Err(FileLockError::AlreadyLocked),
-            raw_error => Err(FileLockError::IOError(std::io::Error::from_raw_os_error(
+            ERROR_LOCK_VIOLATION => Err(FileLockError::AlreadyLocked),
+            raw_error => Err(FileLockError::Io(io::Error::from_raw_os_error(
                 raw_error as i32,
             ))),
         };
@@ -88,7 +88,7 @@ fn lock_file(
     Ok(())
 }
 
-fn unlock_file(raw_handle: RawHandle) -> io::Result<()> {
+fn unlock_file(raw_handle: RawHandle) -> Result<(), FileLockError> {
     let mut overlapped = create_overlapped();
 
     let result = unsafe {
@@ -108,7 +108,9 @@ fn unlock_file(raw_handle: RawHandle) -> io::Result<()> {
         if raw_error == ERROR_NOT_LOCKED {
             Ok(())
         } else {
-            Err(std::io::Error::from_raw_os_error(raw_error as i32))
+            Err(FileLockError::Io(io::Error::from_raw_os_error(
+                raw_error as i32,
+            )))
         }
     }
 }

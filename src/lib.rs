@@ -50,13 +50,12 @@
 //! [`RwLock`]: https://doc.rust-lang.org/stable/std/sync/struct.RwLock.html
 //! [`File`]: https://doc.rust-lang.org/stable/std/fs/struct.File.html
 use std::{
+    fmt,
     fs::{File, OpenOptions},
     io,
     ops::{Deref, DerefMut},
     path::Path,
 };
-
-use thiserror::Error;
 
 #[cfg(windows)]
 mod windows;
@@ -65,15 +64,24 @@ mod windows;
 mod unix;
 
 /// An enumeration of possible errors which can occur while trying to acquire a lock.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum FileLockError {
     /// The file is already locked by other process.
-    #[error("the file is already locked")]
     AlreadyLocked,
     /// The error occurred during I/O operations.
-    #[error("I/O error: {0}")]
-    IOError(#[from] io::Error),
+    Io(io::Error),
 }
+
+impl fmt::Display for FileLockError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileLockError::AlreadyLocked => f.write_str("the file is already locked"),
+            FileLockError::Io(err) => write!(f, "I/O error: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for FileLockError {}
 
 /// An enumeration of types which represents how to acquire an advisory lock.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -116,7 +124,8 @@ impl AdvisoryFileLock {
             .read(true)
             .create(is_exclusive)
             .write(is_exclusive)
-            .open(path)?;
+            .open(path)
+            .map_err(FileLockError::Io)?;
 
         Ok(AdvisoryFileLock {
             file,
@@ -157,10 +166,7 @@ impl AdvisoryFileLock {
 impl Drop for AdvisoryFileLock {
     fn drop(&mut self) {
         if let Err(err) = self.unlock() {
-            log::error!(
-                "[AdvisoryFileLock] unlock_file failed during dropping: {}",
-                err
-            );
+            log::error!("Unlock_file failed during dropping: {}", err);
         }
     }
 }
@@ -222,7 +228,7 @@ mod tests {
             let mut f1 = AdvisoryFileLock::new(&test_file, FileLockMode::Shared).unwrap();
             f1.lock().unwrap();
             let mut f2 = AdvisoryFileLock::new(&test_file, FileLockMode::Exclusive).unwrap();
-            assert!(f2.try_lock().is_err());
+            assert!(matches!(f2.try_lock(), Err(FileLockError::AlreadyLocked)));
         }
         std::fs::remove_file(&test_file).unwrap();
     }

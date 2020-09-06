@@ -35,7 +35,7 @@ fn lock_file(
         let last_os_error = Error::last_os_error();
         return Err(match last_os_error.raw_os_error() {
             Some(code) if code == libc::EWOULDBLOCK => FileLockError::AlreadyLocked,
-            _ => FileLockError::IOError(last_os_error),
+            _ => FileLockError::Io(last_os_error),
         });
     }
 
@@ -47,6 +47,6 @@ fn unlock_file(raw_fd: RawFd) -> Result<(), FileLockError> {
     if result == 0 {
         Ok(())
     } else {
-        Err(FileLockError::IOError(Error::last_os_error()))
+        Err(FileLockError::Io(Error::last_os_error()))
     }
 }
