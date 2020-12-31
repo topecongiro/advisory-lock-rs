@@ -1,19 +1,34 @@
+use std::fs::File;
 use std::io::Error;
 use std::os::unix::io::{AsRawFd, RawFd};
 
 use crate::{AdvisoryFileLock, FileLockError, FileLockMode};
 
-impl AdvisoryFileLock {
-    pub(super) fn lock_impl(&mut self) -> Result<(), FileLockError> {
-        lock_file(self.file.as_raw_fd(), self.file_lock_mode, false)
+impl AdvisoryFileLock for File {
+    fn lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        self.as_raw_fd().lock(file_lock_mode)
     }
 
-    pub(super) fn try_lock_impl(&mut self) -> Result<(), FileLockError> {
-        lock_file(self.file.as_raw_fd(), self.file_lock_mode, true)
+    fn try_lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        self.as_raw_fd().try_lock(file_lock_mode)
     }
 
-    pub(super) fn unlock_impl(&mut self) -> Result<(), FileLockError> {
-        unlock_file(self.file.as_raw_fd())
+    fn unlock(&self) -> Result<(), FileLockError> {
+        self.as_raw_fd().unlock()
+    }
+}
+
+impl AdvisoryFileLock for RawFd {
+    fn lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        lock_file(*self, file_lock_mode, false)
+    }
+
+    fn try_lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        lock_file(*self, file_lock_mode, true)
+    }
+
+    fn unlock(&self) -> Result<(), FileLockError> {
+        unlock_file(*self)
     }
 }
 

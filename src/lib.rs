@@ -10,52 +10,45 @@
 //!
 //! Example:
 //! ```
+//! use std::fs::File;
 //! use advisory_lock::{AdvisoryFileLock, FileLockMode, FileLockError};
 //! #
-//! # std::fs::File::create("foo.txt").unwrap();
 //! #
-//! // Create the file
-//! let mut exclusive_file = AdvisoryFileLock::new("foo.txt", FileLockMode::Exclusive)?;
+//! // Create the file and obtain its exclusive advisory lock
+//! let exclusive_file = File::create("foo.txt").unwrap();
+//! exclusive_file.lock(FileLockMode::Exclusive)?;
 //!
-//! exclusive_file.lock()?;
-//!
-//! let mut shared_file = AdvisoryFileLock::new("foo.txt", FileLockMode::Shared)?;
+//! let shared_file = File::open("foo.txt")?;
 //!
 //! // Try to acquire the lock in non-blocking way
-//! assert!(matches!(shared_file.try_lock(), Err(FileLockError::AlreadyLocked)));
+//! assert!(matches!(shared_file.try_lock(FileLockMode::Shared), Err(FileLockError::AlreadyLocked)));
 //!
 //! exclusive_file.unlock()?;
 //!
-//! shared_file.try_lock().expect("Works, because the exlusive lock was released");
+//! shared_file.try_lock(FileLockMode::Shared).expect("Works, because the exclusive lock was released");
 //!
-//! let mut shared_file_2 = AdvisoryFileLock::new("foo.txt", FileLockMode::Shared)?;
+//! let shared_file_2 = File::open("foo.txt")?;
 //!
-//! shared_file_2.lock().expect("Should be fine to have multiple shared locks");
+//! shared_file_2.lock(FileLockMode::Shared).expect("Should be fine to have multiple shared locks");
 //!
 //! // Nope, now we have to wait until all shared locks are released...
-//! assert!(matches!(exclusive_file.try_lock(), Err(FileLockError::AlreadyLocked)));
+//! assert!(matches!(exclusive_file.try_lock(FileLockMode::Exclusive), Err(FileLockError::AlreadyLocked)));
 //!
 //! // We can unlock them explicitly and handle the potential error
 //! shared_file.unlock()?;
 //! // Or drop the lock, such that we `log::error!()` if it happens and discard it
 //! drop(shared_file_2);
 //!
-//! exclusive_file.lock().expect("All other locks should have been released");
+//! exclusive_file.lock(FileLockMode::Exclusive).expect("All other locks should have been released");
 //! #
 //! # std::fs::remove_file("foo.txt")?;
-//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! [`AdvisoryFileLock`]: struct.AdvisoryFileLock.html
 //! [`RwLock`]: https://doc.rust-lang.org/stable/std/sync/struct.RwLock.html
 //! [`File`]: https://doc.rust-lang.org/stable/std/fs/struct.File.html
-use std::{
-    fmt,
-    fs::{File, OpenOptions},
-    io,
-    ops::{Deref, DerefMut},
-    path::Path,
-};
+use std::{fmt, io};
 
 #[cfg(windows)]
 mod windows;
@@ -106,89 +99,24 @@ pub enum FileLockMode {
 ///
 /// `AdvisoryFileLock` has following limitations:
 /// - Locks are allowed only on files, but not directories.
-pub struct AdvisoryFileLock {
-    /// An underlying file.
-    file: File,
-    /// A file lock mode, shared or exclusive.
-    file_lock_mode: FileLockMode,
-}
-
-impl AdvisoryFileLock {
-    /// Create a new `FileLock`.
-    pub fn new<P: AsRef<Path>>(
-        path: P,
-        file_lock_mode: FileLockMode,
-    ) -> Result<Self, FileLockError> {
-        let is_exclusive = file_lock_mode == FileLockMode::Exclusive;
-        let file = OpenOptions::new()
-            .read(true)
-            .create(is_exclusive)
-            .write(is_exclusive)
-            .open(path)
-            .map_err(FileLockError::Io)?;
-
-        Ok(AdvisoryFileLock {
-            file,
-            file_lock_mode,
-        })
-    }
-
-    /// Return `true` if the advisory lock is acquired by shared mode.
-    pub fn is_shared(&self) -> bool {
-        self.file_lock_mode == FileLockMode::Shared
-    }
-
-    /// Return `true` if the advisory lock is acquired by exclusive mode.
-    pub fn is_exclusive(&self) -> bool {
-        self.file_lock_mode == FileLockMode::Exclusive
-    }
-
+pub trait AdvisoryFileLock {
     /// Acquire the advisory file lock.
     ///
     /// `lock` is blocking; it will block the current thread until it succeeds or errors.
-    pub fn lock(&mut self) -> Result<(), FileLockError> {
-        self.lock_impl()
-    }
-
+    fn lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError>;
     /// Try to acquire the advisory file lock.
     ///
     /// `try_lock` returns immediately.
-    pub fn try_lock(&mut self) -> Result<(), FileLockError> {
-        self.try_lock_impl()
-    }
-
+    fn try_lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError>;
     /// Unlock this advisory file lock.
-    pub fn unlock(&mut self) -> Result<(), FileLockError> {
-        self.unlock_impl()
-    }
-}
-
-impl Drop for AdvisoryFileLock {
-    fn drop(&mut self) {
-        if let Err(err) = self.unlock() {
-            log::error!("Unlock_file failed during dropping: {}", err);
-        }
-    }
-}
-
-impl Deref for AdvisoryFileLock {
-    type Target = File;
-
-    fn deref(&self) -> &Self::Target {
-        &self.file
-    }
-}
-
-impl DerefMut for AdvisoryFileLock {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.file
-    }
+    fn unlock(&self) -> Result<(), FileLockError>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::env::temp_dir;
+    use std::fs::File;
 
     #[test]
     fn simple_shared_lock() {
@@ -196,10 +124,10 @@ mod tests {
         test_file.push("shared_lock");
         File::create(&test_file).unwrap();
         {
-            let mut f1 = AdvisoryFileLock::new(&test_file, FileLockMode::Shared).unwrap();
-            f1.lock().unwrap();
-            let mut f2 = AdvisoryFileLock::new(&test_file, FileLockMode::Shared).unwrap();
-            f2.lock().unwrap();
+            let f1 = File::open(&test_file).unwrap();
+            f1.lock(FileLockMode::Shared).unwrap();
+            let f2 = File::open(&test_file).unwrap();
+            f2.lock(FileLockMode::Shared).unwrap();
         }
         std::fs::remove_file(&test_file).unwrap();
     }
@@ -208,13 +136,12 @@ mod tests {
     fn simple_exclusive_lock() {
         let mut test_file = temp_dir();
         test_file.push("exclusive_lock");
+        File::create(&test_file).unwrap();
         {
-            let mut f1 = AdvisoryFileLock::new(&test_file, FileLockMode::Exclusive).unwrap();
-            f1.lock().unwrap();
-            let f2 = AdvisoryFileLock::new(&test_file, FileLockMode::Exclusive)
-                .unwrap()
-                .try_lock();
-            assert!(f2.is_err());
+            let f1 = File::open(&test_file).unwrap();
+            f1.lock(FileLockMode::Exclusive).unwrap();
+            let f2 = File::open(&test_file).unwrap();
+            assert!(f2.try_lock(FileLockMode::Exclusive).is_err());
         }
         std::fs::remove_file(&test_file).unwrap();
     }
@@ -225,10 +152,13 @@ mod tests {
         test_file.push("shared_exclusive_lock");
         File::create(&test_file).unwrap();
         {
-            let mut f1 = AdvisoryFileLock::new(&test_file, FileLockMode::Shared).unwrap();
-            f1.lock().unwrap();
-            let mut f2 = AdvisoryFileLock::new(&test_file, FileLockMode::Exclusive).unwrap();
-            assert!(matches!(f2.try_lock(), Err(FileLockError::AlreadyLocked)));
+            let f1 = File::open(&test_file).unwrap();
+            f1.lock(FileLockMode::Shared).unwrap();
+            let f2 = File::open(&test_file).unwrap();
+            assert!(matches!(
+                f2.try_lock(FileLockMode::Exclusive),
+                Err(FileLockError::AlreadyLocked)
+            ));
         }
         std::fs::remove_file(&test_file).unwrap();
     }
@@ -237,11 +167,12 @@ mod tests {
     fn simple_exclusive_shared_lock() {
         let mut test_file = temp_dir();
         test_file.push("exclusive_shared_lock");
+        File::create(&test_file).unwrap();
         {
-            let mut f1 = AdvisoryFileLock::new(&test_file, FileLockMode::Exclusive).unwrap();
-            f1.lock().unwrap();
-            let mut f2 = AdvisoryFileLock::new(&test_file, FileLockMode::Exclusive).unwrap();
-            assert!(f2.try_lock().is_err());
+            let f1 = File::open(&test_file).unwrap();
+            f1.lock(FileLockMode::Exclusive).unwrap();
+            let f2 = File::open(&test_file).unwrap();
+            assert!(f2.try_lock(FileLockMode::Shared).is_err());
         }
         std::fs::remove_file(&test_file).unwrap();
     }

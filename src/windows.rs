@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io;
 use std::os::windows::io::{AsRawHandle, RawHandle};
 
@@ -19,17 +20,31 @@ use winapi::{
 
 use crate::{AdvisoryFileLock, FileLockError, FileLockMode};
 
-impl AdvisoryFileLock {
-    pub(super) fn lock_impl(&mut self) -> Result<(), FileLockError> {
-        lock_file(self.file.as_raw_handle(), self.file_lock_mode, false)
+impl AdvisoryFileLock for File {
+    fn lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        lock_file(self.as_raw_handle(), file_lock_mode, false)
     }
 
-    pub(super) fn try_lock_impl(&mut self) -> Result<(), FileLockError> {
-        lock_file(self.file.as_raw_handle(), self.file_lock_mode, true)
+    fn try_lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        lock_file(self.as_raw_handle(), file_lock_mode, true)
     }
 
-    pub(super) fn unlock_impl(&mut self) -> Result<(), FileLockError> {
-        unlock_file(self.file.as_raw_handle())
+    fn unlock(&self) -> Result<(), FileLockError> {
+        unlock_file(self.as_raw_handle())
+    }
+}
+
+impl AdvisoryFileLock for RawHandle {
+    fn lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        lock_file(*self, file_lock_mode, false)
+    }
+
+    fn try_lock(&self, file_lock_mode: FileLockMode) -> Result<(), FileLockError> {
+        lock_file(*self, file_lock_mode, true)
+    }
+
+    fn unlock(&self) -> Result<(), FileLockError> {
+        unlock_file(*self)
     }
 }
 
