@@ -48,7 +48,15 @@
 //! [`AdvisoryFileLock`]: struct.AdvisoryFileLock.html
 //! [`RwLock`]: https://doc.rust-lang.org/stable/std/sync/struct.RwLock.html
 //! [`File`]: https://doc.rust-lang.org/stable/std/fs/struct.File.html
-use std::{fmt, io};
+use std::{
+    fmt,
+    fs::{File, OpenOptions},
+    io::{self, Read, Seek, Write},
+    mem::ManuallyDrop,
+    ops::Deref,
+    path::Path,
+    ptr::addr_of,
+};
 
 #[cfg(windows)]
 mod windows;
@@ -112,6 +120,192 @@ pub trait AdvisoryFileLock {
     fn unlock(&self) -> Result<(), FileLockError>;
 }
 
+/// A guard to a locked file that will automatically unlock it's underlying file when dropped.
+///
+/// ## Example
+/// ```rust
+/// use std::fs::File;
+/// use advisory_lock::{LockGuard, FileLockMode, OpenOptionsExt};
+///
+/// // Opens the file with an exclusive lock
+/// let mut file: LockGuard<File> = File::options()
+///    .write(true)
+///    .truncate(true)
+///    .open_locked("test_file.txt", FileLockMode::Exclusive)
+///    .unwrap();
+///
+/// file.write(b"Hello world!").unwrap();
+/// // When the `file` variable drops, it's underlying file will be unlocked
+/// ```
+#[derive(Debug)]
+pub struct LockGuard<T: ?Sized + AdvisoryFileLock> {
+    inner: T,
+}
+
+impl<T: AdvisoryFileLock> LockGuard<T> {
+    /// Acquire the advisory file lock.
+    ///
+    /// `lock` is blocking; it will block the current thread until it succeeds or errors.
+    pub fn lock(file: T, file_lock_mode: FileLockMode) -> std::io::Result<Self> {
+        match file.lock(file_lock_mode) {
+            Ok(()) => Ok(Self { inner: file }),
+            Err(FileLockError::AlreadyLocked) => Err(std::io::ErrorKind::PermissionDenied.into()),
+            Err(FileLockError::Io(e)) => Err(e),
+        }
+    }
+
+    /// Try to acquire the advisory file lock.
+    ///
+    /// `try_lock` returns immediately.
+    pub fn try_lock(file: T, file_lock_mode: FileLockMode) -> std::io::Result<Option<Self>> {
+        match file.try_lock(file_lock_mode) {
+            Ok(()) => Ok(Some(Self { inner: file })),
+            Err(FileLockError::AlreadyLocked) => Ok(None),
+            Err(FileLockError::Io(e)) => Err(e),
+        }
+    }
+
+    /// Returns the underlying file handle, unlocking the file in the process.
+    pub fn try_unlock(self) -> Result<T, (FileLockError, Self)> {
+        if let Err(e) = self.inner.unlock() {
+            return Err((e, self));
+        }
+
+        let this = ManuallyDrop::new(self);
+        return Ok(unsafe { std::ptr::read(addr_of!(this.inner)) });
+    }
+}
+
+impl<T: ?Sized + AdvisoryFileLock + Read> Read for LockGuard<T> {
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<T: ?Sized + AdvisoryFileLock + Write> Write for LockGuard<T> {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<T: ?Sized + AdvisoryFileLock + Seek> Seek for LockGuard<T> {
+    #[inline]
+    fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+impl<T: ?Sized + AdvisoryFileLock> Deref for LockGuard<T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T: ?Sized + AdvisoryFileLock> Drop for LockGuard<T> {
+    #[inline]
+    fn drop(&mut self) {
+        let _ = self.inner.unlock();
+    }
+}
+
+/// Extended file locking funtionality for [`File`]
+pub trait FileExt {
+    /// Opens a file and acquires the advisory file lock.
+    ///
+    /// See [`open`](std::fs::File::open) and [`lock`](AdvisoryFileLock::lock).
+    fn open_locked<P>(path: P, file_lock_mode: FileLockMode) -> std::io::Result<LockGuard<File>>
+    where
+        P: AsRef<Path>;
+
+    /// Opens a file and tries to acquire the advisory file lock.
+    ///
+    /// See [`open`](std::fs::File::open) and [`try_lock`](AdvisoryFileLock::try_lock).
+    fn try_open_locked<P>(
+        path: P,
+        file_lock_mode: FileLockMode,
+    ) -> std::io::Result<Option<LockGuard<File>>>
+    where
+        P: AsRef<Path>;
+}
+
+impl FileExt for File {
+    fn open_locked<P>(path: P, file_lock_mode: FileLockMode) -> std::io::Result<LockGuard<File>>
+    where
+        P: AsRef<Path>,
+    {
+        return LockGuard::lock(File::open(path)?, file_lock_mode);
+    }
+
+    fn try_open_locked<P>(
+        path: P,
+        file_lock_mode: FileLockMode,
+    ) -> std::io::Result<Option<LockGuard<File>>>
+    where
+        P: AsRef<Path>,
+    {
+        return LockGuard::try_lock(File::open(path)?, file_lock_mode);
+    }
+}
+
+/// Extended file locking funtionality for [`OpenOptions`]
+pub trait OpenOptionsExt {
+    /// Opens a file and acquires the advisory file lock.
+    ///
+    /// See [`open`](std::fs::File::open) and [`lock`](AdvisoryFileLock::lock).
+    fn open_locked<P>(
+        &self,
+        path: P,
+        file_lock_mode: FileLockMode,
+    ) -> std::io::Result<LockGuard<File>>
+    where
+        P: AsRef<Path>;
+
+    /// Opens a file and tries to acquire the advisory file lock.
+    ///
+    /// See [`open`](std::fs::File::open) and [`try_lock`](AdvisoryFileLock::try_lock).
+    fn try_open_locked<P>(
+        &self,
+        path: P,
+        file_lock_mode: FileLockMode,
+    ) -> std::io::Result<Option<LockGuard<File>>>
+    where
+        P: AsRef<Path>;
+}
+
+impl OpenOptionsExt for OpenOptions {
+    fn open_locked<P>(
+        &self,
+        path: P,
+        file_lock_mode: FileLockMode,
+    ) -> std::io::Result<crate::LockGuard<File>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        return LockGuard::lock(self.open(path)?, file_lock_mode);
+    }
+
+    fn try_open_locked<P>(
+        &self,
+        path: P,
+        file_lock_mode: FileLockMode,
+    ) -> std::io::Result<Option<crate::LockGuard<File>>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        return LockGuard::try_lock(self.open(path)?, file_lock_mode);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +367,20 @@ mod tests {
             f1.lock(FileLockMode::Exclusive).unwrap();
             let f2 = File::open(&test_file).unwrap();
             assert!(f2.try_lock(FileLockMode::Shared).is_err());
+        }
+        std::fs::remove_file(&test_file).unwrap();
+    }
+
+    #[test]
+    fn simple_lock_guard() {
+        let mut test_file = temp_dir();
+        test_file.push("lock_guard");
+        File::create(&test_file).unwrap();
+        {
+            let _f1 = File::open_locked(&test_file, FileLockMode::Exclusive).unwrap();
+            assert!(File::try_open_locked(&test_file, FileLockMode::Shared)
+                .unwrap()
+                .is_none());
         }
         std::fs::remove_file(&test_file).unwrap();
     }
